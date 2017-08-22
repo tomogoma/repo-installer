@@ -1,0 +1,14 @@
+# list of repositories to install.
+# - mind the indentation
+
+# github - github.com account/name(s) separated by space
+# e.g.
+#  - tomogoma/micro-installer
+#  - tomogoma/imagems"
+github:
+
+# bitbucket - bitbucket.org account/name(s) separated by space
+# e.g.
+#  - tomogoma/test
+#  - tomogoma/test2
+bitbucket:
