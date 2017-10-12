@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path"
-	"strings"
 
 	"github.com/tomogoma/go-commons/config"
 	"github.com/tomogoma/go-commons/errors"
@@ -17,9 +16,7 @@ import (
 
 func main() {
 
-	var github = flag.String("github", "", "github.com account/name(s) separated by space e.g. \"tomogoma/micro-installer tomogoma/imagems\"")
-	var bitbucket = flag.String("bitbucket", "", "bitbucket.org account/name(s) separated by space e.g. \"tomogoma/test tomogoma/test2\"")
-	var file = flag.String("file", "", "/path/to/repositories.yml file containing github and bitbucket account/names as in repositiories_example.yml")
+	var file = flag.String("file", "", "/path/to/repositories.yml file containing repository urls.")
 	var keepSrc = flag.Bool("keepSrc", false, "Provide this flag to keep src files on completion")
 	var outputDir = flag.String("outputDir", "src", "path/to/parent-output dir to clone dir")
 	var help = flag.Bool("help", false, "Print this help information")
@@ -30,48 +27,39 @@ func main() {
 		return
 	}
 
-	conf := &repositories.Config{Github: make([]string, 0), Bitbucket: make([]string, 0)}
-	if *file != "" {
-		if err := config.ReadYamlConfig(*file, conf); err != nil {
-			log.Printf("error reading repositories file: %v", err)
-			return
-		}
-	}
-	if *github != "" {
-		ghs := strings.Split(*github, " ")
-		conf.Github = append(conf.Github, ghs...)
-	}
-	if *bitbucket != "" {
-		bbs := strings.Split(*bitbucket, " ")
-		conf.Bitbucket = append(conf.Bitbucket, bbs...)
-	}
-	srcs := conf.Sources()
-	if len(srcs) == 0 {
+	conf := repositories.Config{}
+	if err := config.ReadYamlConfig(*file, &conf); err != nil {
+		log.Printf("error reading repositories file: %v", err)
 		flag.Usage()
 		return
 	}
-	for _, source := range srcs {
-		if err := fetchInstallSource(*outputDir, *keepSrc, source); err != nil {
+
+	conf.Clean()
+	if len(conf.Repos) == 0 {
+		flag.Usage()
+		return
+	}
+
+	for _, repo := range conf.Repos {
+		if err := run(*outputDir, *keepSrc, repo); err != nil {
 			log.Println(err)
-			return
 		}
 	}
 }
 
-func fetchInstallSource(outputDir string, keepSrc bool, source repositories.Source) error {
-	baseURL, err := url.Parse(source.URL)
+func run(outputDir string, keepSrc bool, source string) error {
+	URL, err := url.Parse(source)
 	if err != nil {
-		return errors.Newf("Unable to parse '%s' as a URL: %v", source.URL, err)
+		return errors.Newf("Unable to parse '%s' as a URL: %v", source, err)
 	}
-	repo := path.Join(baseURL.Path, source.Repo)
-	dir := path.Join(outputDir, baseURL.Host, repo)
+	dir := path.Join(outputDir, URL.Host, URL.Path)
+	defer cleanUp(keepSrc, dir)
 	if _, err := os.Stat(dir); err == nil {
 		keepSrc = true
 		err = pull(dir)
 	} else {
-		err = clone(baseURL, repo, dir)
+		err = clone(dir, source)
 	}
-	defer cleanUp(keepSrc, dir)
 	if err != nil {
 		return errors.Newf("%v", err)
 	}
@@ -93,22 +81,21 @@ func pull(inDir string) error {
 	}()
 	log.Printf("Pulling to update %s...", inDir)
 	cmd := exec.Command("git", "pull")
-	if err := cmd.Run(); err != nil {
-		return errors.Newf("unable to pull: %v", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return errors.Newf("unable to pull: %v: %s", err, out)
 	}
 	log.Printf("Done pulling.")
 	return nil
 }
 
-func clone(baseURL *url.URL, repo string, intoDir string) error {
+func clone(intoDir, repo string) error {
 	if err := os.MkdirAll(intoDir, 0755); err != nil {
 		return errors.Newf("error creating source dir: %v", err)
 	}
-	URL := baseURL.ResolveReference(&url.URL{Path: repo})
-	log.Printf("Cloning %s into %s...", URL, intoDir)
-	cmd := exec.Command("git", "clone", URL.String(), intoDir)
-	if err := cmd.Run(); err != nil {
-		return errors.Newf("unable to clone: %v", repo, err)
+	log.Printf("Cloning %s into %s...", repo, intoDir)
+	cmd := exec.Command("git", "clone", repo, intoDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return errors.Newf("unable to clone: %v: %s", err, out)
 	}
 	log.Printf("Done cloning.")
 	return nil
@@ -126,18 +113,18 @@ func install(dir string) error {
 		}
 	}()
 	cmd := exec.Command("make", "install")
-	err := cmd.Run()
-	if err != nil {
-		return errors.Newf("error running installer script: %v", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return errors.Newf("error running installer script: %v: %s", err, out)
 	}
 	log.Printf("Done Installing.")
 	return nil
 }
 
 func cleanUp(keepSrc bool, dir string) {
-	if !keepSrc {
-		if err := os.RemoveAll(dir); err != nil {
-			log.Printf("Error cleaning up: %v", err)
-		}
+	if keepSrc {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		log.Printf("Error cleaning up: %v", err)
 	}
 }
